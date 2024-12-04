@@ -120,6 +120,64 @@ int exit_shell() {
     return 1;
 }
 
+void cd(char *dirname) {
+    if (strcmp(dirname, ".") == 0) {
+        return;
+    }
+
+    if (strcmp(dirname, "..") == 0) {
+        if (current_directory_cluster == bpb.RootClus) {
+            return;
+        }
+
+        uint32_t first_sector = cluster_to_sector(current_directory_cluster);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+        fseek(fp, byte_offset, SEEK_SET);
+
+        DirectoryEntry dir;
+        while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+            if ((dir.DIR_Attr & 0x10) && strncmp((char *)dir.DIR_Name, "..", 2) == 0) {
+                current_directory_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+                return;
+            }
+        }
+    }
+
+    uint32_t first_sector = cluster_to_sector(current_directory_cluster);
+    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+    fseek(fp, byte_offset, SEEK_SET);
+
+    DirectoryEntry dir;
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00) {
+            break;
+        }
+        if (dir.DIR_Name[0] == 0xE5) {
+            continue;
+        }
+        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+            continue;
+        }
+
+        char name[12];
+        memcpy(name, dir.DIR_Name, 11);
+        name[11] = '\0';
+        for (int i = 10; i >= 0; i--) {
+            if (name[i] == ' ') {
+                name[i] = '\0';
+            } else {
+                break;
+            }
+        }
+
+        if (strcmp(name, dirname) == 0) {
+            if (dir.DIR_Attr & 0x10) {current_directory_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+                return;
+            }
+        }
+    }
+}
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -151,6 +209,8 @@ int main(int argc, char *argv[]) {
             exit = exit_shell();
         } else if (strcmp(command, "ls") == 0) {
             ls();
+        } else if (strncmp(command, "cd ", 3) == 0) {
+            cd(command + 3);
         } else {
             printf("Unknown command\n");
         }
