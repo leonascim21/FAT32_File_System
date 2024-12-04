@@ -77,6 +77,7 @@ uint32_t cluster_to_sector(uint32_t cluster) {
 
 void ls() {
     uint32_t current_cluster = current_directory_cluster;
+    int dots_printed = 0;
 
     while (1) {
         uint32_t first_sector = cluster_to_sector(current_cluster);
@@ -101,6 +102,13 @@ void ls() {
                 } else {
                     break;
                 }
+            }
+
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                if (dots_printed == 2) {
+                    continue;
+                }
+                dots_printed += 1;
             }
 
             if (dir.DIR_Attr & 0x10) {
