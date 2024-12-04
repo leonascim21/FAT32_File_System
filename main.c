@@ -76,38 +76,50 @@ uint32_t cluster_to_sector(uint32_t cluster) {
 }
 
 void ls() {
-    uint32_t first_sector = cluster_to_sector(current_directory_cluster);
-    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
-    fseek(fp, byte_offset, SEEK_SET);
+    uint32_t current_cluster = current_directory_cluster;
 
-    DirectoryEntry dir;
-    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
-        if (dir.DIR_Name[0] == 0x00) {
-            break;
-        }
-        if (dir.DIR_Name[0] == 0xE5) {
-            continue;
-        }
-        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
-            continue;
-        }
+    while (1) {
+        uint32_t first_sector = cluster_to_sector(current_cluster);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+        fseek(fp, byte_offset, SEEK_SET);
 
-        char name[12];
-        memcpy(name, dir.DIR_Name, 11);
-        name[11] = '\0';
-        for (int i = 10; i >= 0; i--) {
-            if (name[i] == ' ') {
-                name[i] = '\0';
-            } else {
+        DirectoryEntry dir;
+        while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+            if (dir.DIR_Name[0] == 0x00) {
                 break;
+            }
+            if (dir.DIR_Name[0] == 0xE5 || (dir.DIR_Attr & 0x0F) == 0x0F) {
+                continue;
+            }
+
+            char name[12];
+            memcpy(name, dir.DIR_Name, 11);
+            name[11] = '\0';
+            for (int i = 10; i >= 0; i--) {
+                if (name[i] == ' ') {
+                    name[i] = '\0';
+                } else {
+                    break;
+                }
+            }
+
+            if (dir.DIR_Attr & 0x10) {
+                //print codes are to print directories in blue like example
+                printf("\x1b[34m%s\x1b[0m\n", name);
+            } else {
+                printf("%s\n", name);
             }
         }
 
-        if (dir.DIR_Attr & 0x10) {
-            //print codes are to print directories in blue like example
-            printf("\x1b[34m%s \x1b[0m \n", name);
-        } else {
-            printf("%s\n", name);
+        uint32_t fat_offset = current_cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        fread(&current_cluster, sizeof(uint32_t), 1, fp);
+
+        if (current_cluster >= 0x0FFFFFF8) {
+            break;
         }
     }
 }
