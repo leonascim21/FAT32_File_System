@@ -3,27 +3,54 @@
 #include <string.h>
 #include <stdint.h>
 
-#define BPB_BytsPerSec_OFFSET 11
-#define BPB_SecPerClus_OFFSET 13
-#define BPB_RootClus_OFFSET 44
-#define BPB_FATSz32_OFFSET 36
-#define BPB_NumFATs_OFFSET 16
-#define BPB_TotSec32_OFFSET 32
-#define BPB_RsvdSecCnt_OFFSET 14
-
 FILE *fp;
 char image_name[256];
 uint32_t current_directory_cluster;
 
 typedef struct __attribute__((packed)) {
+    uint8_t jumpBoot[3];
+    uint8_t OEMName[8];
     uint16_t BytsPerSec;
     uint8_t SecPerClus;
     uint16_t RsvdSecCnt;
     uint8_t NumFATs;
+    uint16_t RootEntCnt;
+    uint16_t TotSec16;
+    uint8_t Media;
+    uint16_t FATSz16;
+    uint16_t SecPerTrk;
+    uint16_t NumHeads;
+    uint32_t HiddSec;
     uint32_t TotSec32;
     uint32_t FATSz32;
+    uint16_t ExtFlags;
+    uint16_t FSVer;
     uint32_t RootClus;
+    uint16_t FSInfo;
+    uint16_t BkBootSec;
+    uint8_t Reserved[12];
+    uint8_t DrvNum;
+    uint8_t Reserved1;
+    uint8_t BootSig;
+    uint32_t VolID;
+    uint8_t VolLab[11];
+    uint8_t FilSysType[8];
 } BPB;
+
+typedef struct __attribute__((packed)) {
+    uint8_t DIR_Name[11];
+    uint8_t DIR_Attr;
+    uint8_t DIR_NTRes;
+    uint8_t DIR_CrtTimeTenth;
+    uint16_t DIR_CrtTime;
+    uint16_t DIR_CrtDate;
+    uint16_t DIR_LstAccDate;
+    uint16_t DIR_FstClusHI;
+    uint16_t DIR_WrtTime;
+    uint16_t DIR_WrtDate;
+    uint16_t DIR_FstClusLO;
+    uint32_t DIR_FileSize;
+} DirectoryEntry;
 
 BPB bpb;
 
@@ -42,6 +69,47 @@ void print_info() {
     printf("Total Clusters in Data Region: %u\n", total_clusters);
     printf("Number of Entries in One FAT: %u\n", bpb.FATSz32);
     printf("Size of Image: %u bytes\n", size_of_image);
+}
+
+uint32_t cluster_to_sector(uint32_t cluster) {
+    return ((cluster - 2) * bpb.SecPerClus) + (bpb.RsvdSecCnt + (bpb.NumFATs * bpb.FATSz32));
+}
+
+void ls() {
+    uint32_t first_sector = cluster_to_sector(current_directory_cluster);
+    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+    fseek(fp, byte_offset, SEEK_SET);
+
+    DirectoryEntry dir;
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00) {
+            break;
+        }
+        if (dir.DIR_Name[0] == 0xE5) {
+            continue;
+        }
+        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+            continue;
+        }
+
+        char name[12];
+        memcpy(name, dir.DIR_Name, 11);
+        name[11] = '\0';
+        for (int i = 10; i >= 0; i--) {
+            if (name[i] == ' ') {
+                name[i] = '\0';
+            } else {
+                break;
+            }
+        }
+
+        if (dir.DIR_Attr & 0x10) {
+            //print codes are to print directories in blue like example
+            printf("\x1b[34m%s \x1b[0m \n", name);
+        } else {
+            printf("%s\n", name);
+        }
+    }
 }
 
 int exit_shell() {
@@ -81,6 +149,8 @@ int main(int argc, char *argv[]) {
             print_info();
         } else if (strcmp(command, "exit") == 0) {
             exit = exit_shell();
+        } else if (strcmp(command, "ls") == 0) {
+            ls();
         } else {
             printf("Unknown command\n");
         }
