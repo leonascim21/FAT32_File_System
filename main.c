@@ -384,6 +384,18 @@ void creat(char *filename) {
     }
 }
 
+void tokenize_command(char *command, char **tokens, int *token_count) {
+    char *token = strtok(command, " ");
+    *token_count = 0;
+
+    while (token != NULL) {
+        tokens[*token_count] = token;
+        (*token_count)++;
+        token = strtok(NULL, " ");
+    }
+    tokens[*token_count] = NULL;
+}
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -409,18 +421,26 @@ int main(int argc, char *argv[]) {
 
         command[strcspn(command, "\n")] = 0;
 
-        if (strcmp(command, "info") == 0) {
+        char *tokens[10];
+        int token_count = 0;
+        tokenize_command(command, tokens, &token_count);
+
+        if (token_count == 0) {
+            continue;
+        }
+
+        if (strcmp(tokens[0], "info") == 0) {
             print_info();
-        } else if (strcmp(command, "exit") == 0) {
+        } else if (strcmp(tokens[0], "exit") == 0) {
             exit = exit_shell();
-        } else if (strcmp(command, "ls") == 0) {
+        } else if (strcmp(tokens[0], "ls") == 0) {
             ls();
-        } else if (strncmp(command, "cd ", 3) == 0) {
-            cd(command + 3);
-        } else if (strncmp(command, "mkdir ", 6) == 0) {
-            mkdir(command + 6);
-        } else if (strncmp(command, "creat ", 6) == 0) {
-            creat(command + 6);
+        } else if (strcmp(tokens[0], "cd") == 0 && token_count > 1) {
+            cd(tokens[1]);
+        } else if (strcmp(tokens[0], "mkdir") == 0 && token_count > 1) {
+            mkdir(tokens[1]);
+        } else if (strcmp(tokens[0], "creat") == 0 && token_count > 1) {
+            creat(tokens[1]);
         } else {
             printf("Unknown command\n");
         }
