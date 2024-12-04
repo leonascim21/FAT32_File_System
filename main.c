@@ -9,6 +9,7 @@ uint32_t current_directory_cluster;
 char current_path[256] = "/";
 
 #define ATTR_DIRECTORY 0x10
+#define ATTR_ARCHIVE 0x20
 #define EOC 0x0FFFFFF8
 
 typedef struct __attribute__((packed)) {
@@ -329,6 +330,57 @@ void mkdir(char *dirname) {
     fwrite(&dotdot, sizeof(DirectoryEntry), 1, fp);
 }
 
+void creat(char *filename) {
+    uint32_t first_sector = cluster_to_sector(current_directory_cluster);
+    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+    fseek(fp, byte_offset, SEEK_SET);
+
+    DirectoryEntry dir;
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00) {
+            break;
+        }
+        if (dir.DIR_Name[0] == 0xE5) {
+            continue;
+        }
+        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+            continue;
+        }
+
+        char name[12];
+        memcpy(name, dir.DIR_Name, 11);
+        name[11] = '\0';
+        for (int i = 10; i >= 0; i--) {
+            if (name[i] == ' ') {
+                name[i] = '\0';
+            } else {
+                break;
+            }
+        }
+
+        if (strcmp(name, filename) == 0) {
+            printf("File with same name already exists\n");
+            return;
+        }
+    }
+
+    fseek(fp, byte_offset, SEEK_SET);
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00 || dir.DIR_Name[0] == 0xE5) {
+            memset(&dir, 0, sizeof(DirectoryEntry));
+            memset(dir.DIR_Name, ' ', 11);
+            strncpy((char *)dir.DIR_Name, filename, strlen(filename));
+            dir.DIR_Attr = ATTR_ARCHIVE;
+            dir.DIR_FstClusHI = 0;
+            dir.DIR_FstClusLO = 0;
+            dir.DIR_FileSize = 0;
+
+            fseek(fp, -sizeof(DirectoryEntry), SEEK_CUR);
+            fwrite(&dir, sizeof(DirectoryEntry), 1, fp);
+            return;
+        }
+    }
+}
 
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
@@ -365,6 +417,8 @@ int main(int argc, char *argv[]) {
             cd(command + 3);
         } else if (strncmp(command, "mkdir ", 6) == 0) {
             mkdir(command + 6);
+        } else if (strncmp(command, "creat ", 6) == 0) {
+            creat(command + 6);
         } else {
             printf("Unknown command\n");
         }
