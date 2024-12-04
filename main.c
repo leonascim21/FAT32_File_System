@@ -261,12 +261,12 @@ void mkdir(char *dirname) {
     fseek(fp, byte_offset, SEEK_SET);
 
     DirectoryEntry dir;
+    uint32_t entry_offset = 0;
+
     while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
-        if (dir.DIR_Name[0] == 0x00) {
+        if (dir.DIR_Name[0] == 0x00 || dir.DIR_Name[0] == 0xE5) {
+            entry_offset = ftell(fp) - sizeof(DirectoryEntry);
             break;
-        }
-        if (dir.DIR_Name[0] == 0xE5) {
-            continue;
         }
         if ((dir.DIR_Attr & 0x0F) == 0x0F) {
             continue;
@@ -305,8 +305,10 @@ void mkdir(char *dirname) {
     new_dir.DIR_FstClusLO = (uint16_t)(new_cluster & 0xFFFF);
     new_dir.DIR_FileSize = 0;
 
-    fseek(fp, byte_offset, SEEK_SET);
-    fwrite(&new_dir, sizeof(DirectoryEntry), 1, fp);
+    fseek(fp, entry_offset, SEEK_SET);
+    if (fwrite(&new_dir, sizeof(DirectoryEntry), 1, fp) != 1) {
+        return;
+    }
 
     uint32_t new_cluster_sector = cluster_to_sector(new_cluster);
     uint32_t new_byte_offset = new_cluster_sector * bpb.BytsPerSec;
