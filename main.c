@@ -6,6 +6,7 @@
 FILE *fp;
 char image_name[256];
 uint32_t current_directory_cluster;
+char current_path[256] = "/";
 
 typedef struct __attribute__((packed)) {
     uint8_t jumpBoot[3];
@@ -147,6 +148,7 @@ void cd(char *dirname) {
 
     if (strcmp(dirname, "..") == 0) {
         if (current_directory_cluster == bpb.RootClus) {
+            strcpy(current_path, "/");
             return;
         }
 
@@ -156,11 +158,28 @@ void cd(char *dirname) {
 
         DirectoryEntry dir;
         while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
-            if ((dir.DIR_Attr & 0x10) && strncmp((char *)dir.DIR_Name, "..", 2) == 0) {
-                current_directory_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+            if (strncmp((char *)dir.DIR_Name, "..", 2) == 0 && (dir.DIR_Attr & 0x10)) {
+                uint32_t parent_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+
+                if (parent_cluster == 0) {
+                    current_directory_cluster = bpb.RootClus;
+                    strcpy(current_path, "/");
+                } else {
+                    current_directory_cluster = parent_cluster;
+
+                    if (strcmp(current_path, "/") != 0) {
+                        char *last_slash = strrchr(current_path, '/');
+                        if (last_slash != NULL && last_slash != current_path) {
+                            *last_slash = '\0';
+                        } else {
+                            strcpy(current_path, "/");
+                        }
+                    }
+                }
                 return;
             }
         }
+        return;
     }
 
     uint32_t first_sector = cluster_to_sector(current_directory_cluster);
@@ -191,7 +210,14 @@ void cd(char *dirname) {
         }
 
         if (strcmp(name, dirname) == 0) {
-            if (dir.DIR_Attr & 0x10) {current_directory_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+            if (dir.DIR_Attr & 0x10) {
+                current_directory_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+
+                if (strcmp(current_path, "/") == 0) {
+                    snprintf(current_path, sizeof(current_path), "/%s", name);
+                } else {
+                    snprintf(current_path + strlen(current_path), sizeof(current_path) - strlen(current_path), "/%s", name);
+                }
                 return;
             }
         }
@@ -218,7 +244,7 @@ int main(int argc, char *argv[]) {
     int exit = 0;
     char command[256];
     while (!exit) {
-        printf("%s/> ", image_name);
+        printf("%s%s> ", image_name, current_path);
         fgets(command, sizeof(command), stdin);
 
         command[strcspn(command, "\n")] = 0;
