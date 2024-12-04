@@ -11,6 +11,7 @@ char current_path[256] = "/";
 #define ATTR_DIRECTORY 0x10
 #define ATTR_ARCHIVE 0x20
 #define EOC 0x0FFFFFF8
+#define MAX_OPEN_FILES 10
 
 typedef struct __attribute__((packed)) {
     uint8_t jumpBoot[3];
@@ -56,6 +57,17 @@ typedef struct __attribute__((packed)) {
     uint16_t DIR_FstClusLO;
     uint32_t DIR_FileSize;
 } DirectoryEntry;
+
+typedef struct {
+    char name[12];
+    uint32_t cluster;
+    char flag[3];
+    uint32_t offset;
+    int in_use;
+    char path[256];
+} OpenFile;
+
+OpenFile open_files[MAX_OPEN_FILES] = {0};
 
 BPB bpb;
 
@@ -396,6 +408,81 @@ void tokenize_command(char *command, char **tokens, int *token_count) {
     tokens[*token_count] = NULL;
 }
 
+void open_file(char *filename, char *flag) {
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+            printf("File is already open\n");
+            return;
+        }
+    }
+
+    if (strcmp(flag, "-r") != 0 && strcmp(flag, "-w") != 0 && strcmp(flag, "-rw") != 0 && strcmp(flag, "-wr") != 0) {
+        printf("Invalid flags\n");
+        return;
+    }
+
+    uint32_t first_sector = cluster_to_sector(current_directory_cluster);
+    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+    fseek(fp, byte_offset, SEEK_SET);
+
+    DirectoryEntry dir;
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00) {
+            break;
+        }
+        if (dir.DIR_Name[0] == 0xE5) {
+            continue;
+        }
+        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+            continue;
+        }
+
+        char name[12];
+        memcpy(name, dir.DIR_Name, 11);
+        name[11] = '\0';
+        for (int i = 10; i >= 0; i--) {
+            if (name[i] == ' ') {
+                name[i] = '\0';
+            } else {
+                break;
+            }
+        }
+
+        if (strcmp(name, filename) == 0) {
+            if (dir.DIR_Attr & ATTR_DIRECTORY) {
+                return;
+            }
+
+            for (int i = 0; i < MAX_OPEN_FILES; i++) {
+                if (!open_files[i].in_use) {
+                    strncpy(open_files[i].name, filename, sizeof(open_files[i].name) - 1);
+                    open_files[i].cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+                    strncpy(open_files[i].flag, flag + 1, sizeof(open_files[i].flag) - 1);
+                    open_files[i].offset = 0;
+                    open_files[i].in_use = 1;
+                    strncpy(open_files[i].path, current_path, sizeof(open_files[i].path) - 1);
+                    printf("File successfully open in mode %s\n", flag);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+void lsof() {
+    int open_count = 0;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use) {
+            printf("Index: %d, Name: %s, Flag: %s, Offset: %u, Path: %s\n",
+                   i, open_files[i].name, open_files[i].flag, open_files[i].offset, open_files[i].path);
+            open_count++;
+        }
+    }
+    if (open_count == 0) {
+        printf("No open files\n");
+    }
+}
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -441,6 +528,10 @@ int main(int argc, char *argv[]) {
             mkdir(tokens[1]);
         } else if (strcmp(tokens[0], "creat") == 0 && token_count > 1) {
             creat(tokens[1]);
+        } else if (strcmp(tokens[0], "open") == 0 && token_count > 2) {
+            open_file(tokens[1], tokens[2]);
+        } else if (strcmp(tokens[0], "lsof") == 0) {
+            lsof();
         } else {
             printf("Unknown command\n");
         }
