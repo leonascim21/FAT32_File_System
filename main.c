@@ -483,6 +483,26 @@ void lsof() {
     }
 }
 
+void close_file(char *filename) {
+    int found = 0;
+
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+            open_files[i].in_use = 0;
+            memset(open_files[i].name, 0, sizeof(open_files[i].name));
+            memset(open_files[i].path, 0, sizeof(open_files[i].path));
+            open_files[i].offset = 0;
+            found = 1;
+            printf("File closed\n");
+            break;
+        }
+    }
+
+    if (!found) {
+        printf("File not open or does not exist\n");
+    }
+}
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -532,6 +552,8 @@ int main(int argc, char *argv[]) {
             open_file(tokens[1], tokens[2]);
         } else if (strcmp(tokens[0], "lsof") == 0) {
             lsof();
+        } else if (strcmp(tokens[0], "close") == 0 && token_count > 1) {
+            close_file(tokens[1]);
         } else {
             printf("Unknown command\n");
         }
