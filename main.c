@@ -503,6 +503,32 @@ void close_file(char *filename) {
     }
 }
 
+void lseek_file(char *filename, uint32_t offset) {
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+
+            uint32_t first_sector = cluster_to_sector(open_files[i].cluster);
+            uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+            fseek(fp, byte_offset, SEEK_SET);
+
+            DirectoryEntry dir;
+            fread(&dir, sizeof(DirectoryEntry), 1, fp);
+
+            uint32_t file_size = dir.DIR_FileSize;
+
+            if (offset > file_size) {
+                printf("Offset exceeds the file size.\n");
+                return;
+            }
+
+            open_files[i].offset = offset;
+            printf("Offset updated\n");
+            return;
+        }
+    }
+    printf("File not open or does not exist.\n");
+}
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -554,6 +580,8 @@ int main(int argc, char *argv[]) {
             lsof();
         } else if (strcmp(tokens[0], "close") == 0 && token_count > 1) {
             close_file(tokens[1]);
+        } else if (strcmp(tokens[0], "lseek") == 0 && token_count > 2) {
+            lseek_file(tokens[1], atoi(tokens[2]));
         } else {
             printf("Unknown command\n");
         }
