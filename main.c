@@ -8,6 +8,9 @@ char image_name[256];
 uint32_t current_directory_cluster;
 char current_path[256] = "/";
 
+#define ATTR_DIRECTORY 0x10
+#define EOC 0x0FFFFFF8
+
 typedef struct __attribute__((packed)) {
     uint8_t jumpBoot[3];
     uint8_t OEMName[8];
@@ -112,7 +115,7 @@ void ls() {
                 dots_printed += 1;
             }
 
-            if (dir.DIR_Attr & 0x10) {
+            if (dir.DIR_Attr & ATTR_DIRECTORY) {
                 //print codes are to print directories in blue like example
                 printf("\x1b[34m%s\x1b[0m\n", name);
             } else {
@@ -127,7 +130,7 @@ void ls() {
         fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
         fread(&current_cluster, sizeof(uint32_t), 1, fp);
 
-        if (current_cluster >= 0x0FFFFFF8) {
+        if (current_cluster >= EOC) {
             break;
         }
     }
@@ -158,7 +161,7 @@ void cd(char *dirname) {
 
         DirectoryEntry dir;
         while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
-            if (strncmp((char *)dir.DIR_Name, "..", 2) == 0 && (dir.DIR_Attr & 0x10)) {
+            if (strncmp((char *)dir.DIR_Name, "..", 2) == 0 && (dir.DIR_Attr & ATTR_DIRECTORY)) {
                 uint32_t parent_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
 
                 if (parent_cluster == 0) {
@@ -210,7 +213,7 @@ void cd(char *dirname) {
         }
 
         if (strcmp(name, dirname) == 0) {
-            if (dir.DIR_Attr & 0x10) {
+            if (dir.DIR_Attr & ATTR_DIRECTORY) {
                 current_directory_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
 
                 if (strcmp(current_path, "/") == 0) {
@@ -224,6 +227,109 @@ void cd(char *dirname) {
     }
 }
 
+uint32_t find_free_cluster() {
+    uint32_t fat_offset, fat_value;
+    for (uint32_t cluster = 2; cluster < (bpb.TotSec32 / bpb.SecPerClus); cluster++) {
+        fat_offset = cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        fread(&fat_value, sizeof(uint32_t), 1, fp);
+        fat_value &= 0x0FFFFFFF;
+
+        if (fat_value == 0x00000000) {
+            return cluster;
+        }
+    }
+    return 0;
+}
+
+void allocate_cluster(uint32_t cluster, uint32_t value) {
+    uint32_t fat_offset = cluster * 4;
+    uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+    uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+    fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+    fwrite(&value, sizeof(uint32_t), 1, fp);
+}
+
+void mkdir(char *dirname) {
+    uint32_t first_sector = cluster_to_sector(current_directory_cluster);
+    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+    fseek(fp, byte_offset, SEEK_SET);
+
+    DirectoryEntry dir;
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00) {
+            break;
+        }
+        if (dir.DIR_Name[0] == 0xE5) {
+            continue;
+        }
+        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+            continue;
+        }
+
+        char name[12];
+        memcpy(name, dir.DIR_Name, 11);
+        name[11] = '\0';
+        for (int i = 10; i >= 0; i--) {
+            if (name[i] == ' ') {
+                name[i] = '\0';
+            } else {
+                break;
+            }
+        }
+
+        if (strcmp(name, dirname) == 0) {
+            printf("Directory with same name already exists\n");
+            return;
+        }
+    }
+
+    uint32_t new_cluster = find_free_cluster();
+    if (new_cluster == 0) {
+        printf("No free cluster available\n");
+        return;
+    }
+
+    allocate_cluster(new_cluster, EOC);
+
+    DirectoryEntry new_dir = {0};
+    memset(new_dir.DIR_Name, ' ', 11);
+    strncpy((char *)new_dir.DIR_Name, dirname, strlen(dirname));
+    new_dir.DIR_Attr = ATTR_DIRECTORY;
+    new_dir.DIR_FstClusHI = (uint16_t)(new_cluster >> 16);
+    new_dir.DIR_FstClusLO = (uint16_t)(new_cluster & 0xFFFF);
+    new_dir.DIR_FileSize = 0;
+
+    fseek(fp, byte_offset, SEEK_SET);
+    fwrite(&new_dir, sizeof(DirectoryEntry), 1, fp);
+
+    uint32_t new_cluster_sector = cluster_to_sector(new_cluster);
+    uint32_t new_byte_offset = new_cluster_sector * bpb.BytsPerSec;
+    fseek(fp, new_byte_offset, SEEK_SET);
+
+    DirectoryEntry dot = {0}, dotdot = {0};
+    memset(dot.DIR_Name, ' ', 11);
+    memset(dotdot.DIR_Name, ' ', 11);
+    dot.DIR_Name[0] = '.';
+    dot.DIR_Attr = ATTR_DIRECTORY;
+    dot.DIR_FstClusHI = (uint16_t)(new_cluster >> 16);
+    dot.DIR_FstClusLO = (uint16_t)(new_cluster & 0xFFFF);
+
+    dotdot.DIR_Name[0] = '.';
+    dotdot.DIR_Name[1] = '.';
+    dotdot.DIR_Attr = ATTR_DIRECTORY;
+    dotdot.DIR_FstClusHI = (uint16_t)(current_directory_cluster >> 16);
+    dotdot.DIR_FstClusLO = (uint16_t)(current_directory_cluster & 0xFFFF);
+
+    fwrite(&dot, sizeof(DirectoryEntry), 1, fp);
+    fwrite(&dotdot, sizeof(DirectoryEntry), 1, fp);
+}
+
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -232,7 +338,7 @@ int main(int argc, char *argv[]) {
     }
 
     strncpy(image_name, argv[1], 256);
-    fp = fopen(image_name, "rb");
+    fp = fopen(image_name, "rb+");
     if (fp == NULL) {
         perror("Failed to open image file");
         return 1;
@@ -257,6 +363,8 @@ int main(int argc, char *argv[]) {
             ls();
         } else if (strncmp(command, "cd ", 3) == 0) {
             cd(command + 3);
+        } else if (strncmp(command, "mkdir ", 6) == 0) {
+            mkdir(command + 6);
         } else {
             printf("Unknown command\n");
         }
