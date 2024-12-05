@@ -529,6 +529,71 @@ void lseek_file(char *filename, uint32_t offset) {
     printf("File not open or does not exist.\n");
 }
 
+void read_file(char *filename, uint32_t size) {
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+
+            if (strcmp(open_files[i].flag, "r") != 0 && strcmp(open_files[i].flag, "rw") != 0 && strcmp(open_files[i].flag, "wr") != 0) {
+                printf("File does not have read flag.\n");
+                return;
+            }
+
+            uint32_t first_sector = cluster_to_sector(open_files[i].cluster);
+            uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+            fseek(fp, byte_offset, SEEK_SET);
+
+            DirectoryEntry dir;
+            fread(&dir, sizeof(DirectoryEntry), 1, fp);
+
+            uint32_t file_size = dir.DIR_FileSize;
+
+            uint32_t offset = open_files[i].offset;
+            if (offset + size > file_size) {
+                size = file_size - offset;
+            }
+
+            uint32_t current_cluster = open_files[i].cluster;
+            uint32_t bytes_read = 0;
+            char buffer[512];
+
+            while (bytes_read < size) {
+                uint32_t sector = cluster_to_sector(current_cluster);
+                byte_offset = sector * bpb.BytsPerSec + offset % (bpb.SecPerClus * bpb.BytsPerSec);
+                fseek(fp, byte_offset, SEEK_SET);
+
+                uint32_t bytes_to_read = bpb.SecPerClus * bpb.BytsPerSec - (offset % (bpb.SecPerClus * bpb.BytsPerSec));
+                if (bytes_to_read > size - bytes_read) {
+                    bytes_to_read = size - bytes_read;
+                }
+
+                fread(buffer, 1, bytes_to_read, fp);
+                buffer[bytes_to_read] = '\0';
+                printf("%s", buffer);
+
+                bytes_read += bytes_to_read;
+                offset += bytes_to_read;
+
+                if (bytes_read < size) {
+                    uint32_t fat_offset = current_cluster * 4;
+                    uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+                    uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+                    fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+                    fread(&current_cluster, sizeof(uint32_t), 1, fp);
+
+                    if (current_cluster >= EOC) {
+                        break;
+                    }
+                }
+            }
+
+            open_files[i].offset = offset;
+            return;
+        }
+    }
+    printf("File is not open or does not exist.\n");
+}
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -582,6 +647,8 @@ int main(int argc, char *argv[]) {
             close_file(tokens[1]);
         } else if (strcmp(tokens[0], "lseek") == 0 && token_count > 2) {
             lseek_file(tokens[1], atoi(tokens[2]));
+        }  else if (strcmp(tokens[0], "read") == 0 && token_count > 2) {
+            read_file(tokens[1], atoi(tokens[2]));
         } else {
             printf("Unknown command\n");
         }
