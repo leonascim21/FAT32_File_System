@@ -588,6 +588,7 @@ void read_file(char *filename, uint32_t size) {
             }
 
             open_files[i].offset = offset;
+            printf("\n");
             return;
         }
     }
