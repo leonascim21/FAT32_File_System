@@ -402,8 +402,30 @@ void tokenize_command(char *command, char **tokens, int *token_count) {
     *token_count = 0;
 
     while (token != NULL) {
-        tokens[*token_count] = token;
-        (*token_count)++;
+        if (token[0] == '"') {
+            char str[256] = "";
+
+            strcat(str, token + 1);
+            strcat(str, " ");
+
+            token = strtok(NULL, " ");
+            while (token != NULL && token[strlen(token) - 1] != '"') {
+                strcat(str, token);
+                strcat(str, " ");
+                token = strtok(NULL, " ");
+            }
+
+            if (token != NULL) {
+                token[strlen(token) - 1] = '\0';
+                strcat(str, token);
+            }
+
+            tokens[*token_count] = strdup(str);
+            (*token_count)++;
+        } else {
+            tokens[*token_count] = strdup(token);
+            (*token_count)++;
+        }
         token = strtok(NULL, " ");
     }
     tokens[*token_count] = NULL;
