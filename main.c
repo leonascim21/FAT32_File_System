@@ -65,6 +65,7 @@ typedef struct {
     uint32_t offset;
     int in_use;
     char path[256];
+    uint32_t size;
 } OpenFile;
 
 OpenFile open_files[MAX_OPEN_FILES] = {0};
@@ -461,6 +462,7 @@ void open_file(char *filename, char *flag) {
                     open_files[i].offset = 0;
                     open_files[i].in_use = 1;
                     strncpy(open_files[i].path, current_path, sizeof(open_files[i].path) - 1);
+                    open_files[i].size = dir.DIR_FileSize;
                     printf("File successfully open in mode %s\n", flag);
                     return;
                 }
@@ -492,6 +494,7 @@ void close_file(char *filename) {
             memset(open_files[i].name, 0, sizeof(open_files[i].name));
             memset(open_files[i].path, 0, sizeof(open_files[i].path));
             open_files[i].offset = 0;
+            open_files[i].size = 0;
             found = 1;
             printf("File closed\n");
             break;
@@ -538,15 +541,7 @@ void read_file(char *filename, uint32_t size) {
                 return;
             }
 
-            uint32_t first_sector = cluster_to_sector(open_files[i].cluster);
-            uint32_t byte_offset = first_sector * bpb.BytsPerSec;
-            fseek(fp, byte_offset, SEEK_SET);
-
-            DirectoryEntry dir;
-            fread(&dir, sizeof(DirectoryEntry), 1, fp);
-
-            uint32_t file_size = dir.DIR_FileSize;
-
+            uint32_t file_size = open_files[i].size;
             uint32_t offset = open_files[i].offset;
             if (offset + size > file_size) {
                 size = file_size - offset;
@@ -558,7 +553,7 @@ void read_file(char *filename, uint32_t size) {
 
             while (bytes_read < size) {
                 uint32_t sector = cluster_to_sector(current_cluster);
-                byte_offset = sector * bpb.BytsPerSec + offset % (bpb.SecPerClus * bpb.BytsPerSec);
+                uint32_t byte_offset = sector * bpb.BytsPerSec + offset % (bpb.SecPerClus * bpb.BytsPerSec);
                 fseek(fp, byte_offset, SEEK_SET);
 
                 uint32_t bytes_to_read = bpb.SecPerClus * bpb.BytsPerSec - (offset % (bpb.SecPerClus * bpb.BytsPerSec));
@@ -566,12 +561,12 @@ void read_file(char *filename, uint32_t size) {
                     bytes_to_read = size - bytes_read;
                 }
 
-                fread(buffer, 1, bytes_to_read, fp);
-                buffer[bytes_to_read] = '\0';
+                size_t read_now = fread(buffer, 1, bytes_to_read, fp);
+                buffer[read_now] = '\0';
                 printf("%s", buffer);
 
-                bytes_read += bytes_to_read;
-                offset += bytes_to_read;
+                bytes_read += read_now;
+                offset += read_now;
 
                 if (bytes_read < size) {
                     uint32_t fat_offset = current_cluster * 4;
@@ -787,6 +782,196 @@ void rename_file(char *filename, char *new_filename) {
     fwrite(&dir, sizeof(DirectoryEntry), 1, fp);
 }
 
+void write_file(char *filename, char *string) {
+    int file_index = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+            if (strcmp(open_files[i].flag, "w") != 0 &&
+                strcmp(open_files[i].flag, "rw") != 0 &&
+                strcmp(open_files[i].flag, "wr") != 0) {
+                printf("File does not have write flag.\n");
+                return;
+            }
+            file_index = i;
+            break;
+        }
+    }
+
+    if (file_index == -1) {
+        printf("File is not open or does not exist.\n");
+        return;
+    }
+
+    uint32_t offset = open_files[file_index].offset;
+    uint32_t bytes_per_cluster = bpb.SecPerClus * bpb.BytsPerSec;
+    uint32_t length_to_write = (uint32_t)strlen(string);
+    uint32_t bytes_written = 0;
+
+    uint32_t dir_cluster = current_directory_cluster;
+    uint32_t dir_cluster_to_read = dir_cluster;
+    DirectoryEntry dir_entry;
+    uint32_t dir_entry_offset = 0;
+    int found = 0;
+
+    while (1) {
+        uint32_t first_sector = cluster_to_sector(dir_cluster_to_read);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+        fseek(fp, byte_offset, SEEK_SET);
+
+        DirectoryEntry dir;
+        while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+            if (dir.DIR_Name[0] == 0x00) {
+                break;
+            }
+            if (dir.DIR_Name[0] == 0xE5) {
+                continue;
+            }
+            if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+                continue;
+            }
+
+            char name[12];
+            memcpy(name, dir.DIR_Name, 11);
+            name[11] = '\0';
+            for (int j = 10; j >= 0; j--) {
+                if (name[j] == ' ') {
+                    name[j] = '\0';
+                } else {
+                    break;
+                }
+            }
+
+            if (strcmp(name, filename) == 0) {
+                memcpy(&dir_entry, &dir, sizeof(DirectoryEntry));
+                dir_entry_offset = ftell(fp) - sizeof(DirectoryEntry);
+                found = 1;
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+
+        uint32_t fat_offset = dir_cluster_to_read * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        uint32_t next_cluster;
+        fread(&next_cluster, sizeof(uint32_t), 1, fp);
+        next_cluster &= 0x0FFFFFFF;
+
+        if (next_cluster >= EOC) {
+            break;
+        }
+        dir_cluster_to_read = next_cluster;
+    }
+
+    if (!found) {
+        printf("File does not exist\n");
+        return;
+    }
+
+    uint32_t file_size = dir_entry.DIR_FileSize;
+    uint32_t current_cluster = open_files[file_index].cluster;
+
+    if (current_cluster == 0) {
+        uint32_t new_cluster = find_free_cluster();
+        if (new_cluster == 0) {
+            return;
+        }
+        allocate_cluster(new_cluster, EOC);
+        current_cluster = new_cluster;
+        open_files[file_index].cluster = new_cluster;
+
+        dir_entry.DIR_FstClusHI = (uint16_t)(new_cluster >> 16);
+        dir_entry.DIR_FstClusLO = (uint16_t)(new_cluster & 0xFFFF);
+
+        fseek(fp, dir_entry_offset, SEEK_SET);
+        fwrite(&dir_entry, sizeof(DirectoryEntry), 1, fp);
+    }
+
+    uint32_t cluster_offset = offset / bytes_per_cluster;
+    uint32_t offset_within_cluster = offset % bytes_per_cluster;
+
+    for (uint32_t c = 0; c < cluster_offset; c++) {
+        uint32_t fat_offset = current_cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        uint32_t next_cluster;
+        fread(&next_cluster, sizeof(uint32_t), 1, fp);
+        next_cluster &= 0x0FFFFFFF;
+
+        if (next_cluster >= EOC) {
+            uint32_t new_cluster = find_free_cluster();
+            if (new_cluster == 0) {
+                return;
+            }
+            fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+            fwrite(&new_cluster, sizeof(uint32_t), 1, fp);
+            allocate_cluster(new_cluster, EOC);
+            current_cluster = new_cluster;
+        } else {
+            current_cluster = next_cluster;
+        }
+    }
+
+    while (bytes_written < length_to_write) {
+        uint32_t first_sector = cluster_to_sector(current_cluster);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec + offset_within_cluster;
+        fseek(fp, byte_offset, SEEK_SET);
+
+        uint32_t remaining_in_cluster = bytes_per_cluster - offset_within_cluster;
+        uint32_t bytes_to_write = (length_to_write - bytes_written) < remaining_in_cluster ? (length_to_write - bytes_written) : remaining_in_cluster;
+
+        size_t written = fwrite(string + bytes_written, 1, bytes_to_write, fp);
+        if (written != bytes_to_write) {
+            return;
+        }
+
+        bytes_written += bytes_to_write;
+        offset_within_cluster = 0;
+
+        if (bytes_written < length_to_write) {
+            uint32_t fat_offset = current_cluster * 4;
+            uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+            uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+            fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+            uint32_t next_cluster;
+            fread(&next_cluster, sizeof(uint32_t), 1, fp);
+            next_cluster &= 0x0FFFFFFF;
+
+            if (next_cluster >= EOC) {
+                uint32_t new_cluster = find_free_cluster();
+                if (new_cluster == 0) {
+                    return;
+                }
+                fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+                fwrite(&new_cluster, sizeof(uint32_t), 1, fp);
+                allocate_cluster(new_cluster, EOC);
+                current_cluster = new_cluster;
+            } else {
+                current_cluster = next_cluster;
+            }
+        }
+    }
+
+    open_files[file_index].offset += bytes_written;
+
+    if (open_files[file_index].offset > file_size) {
+        dir_entry.DIR_FileSize = open_files[file_index].offset;
+        fseek(fp, dir_entry_offset, SEEK_SET);
+        fwrite(&dir_entry, sizeof(DirectoryEntry), 1, fp);
+
+        open_files[file_index].size = dir_entry.DIR_FileSize;
+    }
+}
+
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -846,6 +1031,8 @@ int main(int argc, char *argv[]) {
             rm(tokens[1]);
         } else if (strcmp(tokens[0], "rename") == 0 && token_count > 2) {
             rename_file(tokens[1], tokens[2]);
+        } else if (strcmp(tokens[0], "write") == 0 && token_count > 2) {
+            write_file(tokens[1], tokens[2]);
         } else {
             printf("Unknown command\n");
         }
