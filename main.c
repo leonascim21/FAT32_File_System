@@ -617,7 +617,7 @@ void rm(char *filename) {
             if (dir.DIR_Name[0] == 0x00) {
                 break;
             }
-            if (dir.DIR_Name[0] == 0xE50) {
+            if (dir.DIR_Name[0] == 0xE5) {
                 continue;
             }
             if ((dir.DIR_Attr & 0x0F) == 0x0F) {
@@ -693,6 +693,99 @@ void rm(char *filename) {
     fwrite(&deleted_marker, sizeof(uint8_t), 1, fp);
 }
 
+void rename_file(char *filename, char *new_filename) {
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+            printf("File must be closed.\n");
+            return;
+        }
+    }
+
+    uint32_t current_cluster = current_directory_cluster;
+    DirectoryEntry dir;
+    int found = 0;
+    int new_name_exists = 0;
+    uint32_t entry_offset = 0;
+    uint8_t original_attr = 0;
+    uint32_t original_cluster = 0;
+
+    while (1) {
+        uint32_t first_sector = cluster_to_sector(current_cluster);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+        fseek(fp, byte_offset, SEEK_SET);
+
+        while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+            if (dir.DIR_Name[0] == 0x00) {
+                break;
+            }
+            if (dir.DIR_Name[0] == 0xE5) {
+                continue;
+            }
+            if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+                continue;
+            }
+
+            char name[12];
+            memcpy(name, dir.DIR_Name, 11);
+            name[11] = '\0';
+            for (int i = 10; i >= 0; i--) {
+                if (name[i] == ' ') {
+                    name[i] = '\0';
+                } else {
+                    break;
+                }
+            }
+
+            if (strcmp(name, filename) == 0) {
+                if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                    printf("Cannot rename special directories '.' or '..'.\n");
+                    return;
+                }
+                found = 1;
+                entry_offset = ftell(fp) - sizeof(DirectoryEntry);
+                original_attr = dir.DIR_Attr;
+                original_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+            } else if (strcmp(name, new_filename) == 0) {
+                new_name_exists = 1;
+            }
+        }
+
+        if (found || new_name_exists) {
+            break;
+        }
+
+        uint32_t fat_offset = current_cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        fread(&current_cluster, sizeof(uint32_t), 1, fp);
+        current_cluster &= 0x0FFFFFFF;
+
+        if (current_cluster >= EOC) {
+            break;
+        }
+    }
+
+    if (!found) {
+        printf("File does not exist.\n");
+        return;
+    }
+
+    if (new_name_exists) {
+        printf("File with same name already exists.\n");
+        return;
+    }
+
+    memset(dir.DIR_Name, ' ', 11);
+    strncpy((char *)dir.DIR_Name, new_filename, strlen(new_filename));
+    dir.DIR_Attr = original_attr;
+    dir.DIR_FstClusHI = (uint16_t)(original_cluster >> 16);
+    dir.DIR_FstClusLO = (uint16_t)(original_cluster & 0xFFFF);
+
+    fseek(fp, entry_offset, SEEK_SET);
+    fwrite(&dir, sizeof(DirectoryEntry), 1, fp);
+}
 
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
@@ -751,6 +844,8 @@ int main(int argc, char *argv[]) {
             read_file(tokens[1], atoi(tokens[2]));
         } else if (strcmp(tokens[0], "rm") == 0 && token_count > 1) {
             rm(tokens[1]);
+        } else if (strcmp(tokens[0], "rename") == 0 && token_count > 2) {
+            rename_file(tokens[1], tokens[2]);
         } else {
             printf("Unknown command\n");
         }
