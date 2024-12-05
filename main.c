@@ -595,6 +595,105 @@ void read_file(char *filename, uint32_t size) {
     printf("File is not open or does not exist.\n");
 }
 
+void rm(char *filename) {
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_files[i].in_use && strcmp(open_files[i].name, filename) == 0) {
+            printf("File must be closed to be deleted.\n");
+            return;
+        }
+    }
+
+    uint32_t current_cluster = current_directory_cluster;
+    int found = 0;
+    uint32_t dir_entry_offset = 0;
+    DirectoryEntry dir;
+
+    while (1) {
+        uint32_t first_sector = cluster_to_sector(current_cluster);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+        fseek(fp, byte_offset, SEEK_SET);
+
+        while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+            if (dir.DIR_Name[0] == 0x00) {
+                break;
+            }
+            if (dir.DIR_Name[0] == 0xE50) {
+                continue;
+            }
+            if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+                continue;
+            }
+
+            char name[12];
+            memcpy(name, dir.DIR_Name, 11);
+            name[11] = '\0';
+            for (int i = 10; i >= 0; i--) {
+                if (name[i] == ' ') {
+                    name[i] = '\0';
+                } else {
+                    break;
+                }
+            }
+
+            if (strcmp(name, filename) == 0) {
+                if (dir.DIR_Attr & ATTR_DIRECTORY) {
+                    printf("target is a diretory, use rmdir.\n");
+                    return;
+                }
+
+                found = 1;
+                dir_entry_offset = ftell(fp) - sizeof(DirectoryEntry);
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+
+        uint32_t fat_offset = current_cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        fread(&current_cluster, sizeof(uint32_t), 1, fp);
+        current_cluster &= 0x0FFFFFFF;
+
+        if (current_cluster >= EOC) {
+            break;
+        }
+    }
+
+    if (!found) {
+        printf("File does not exist\n");
+        return;
+    }
+
+    current_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+
+    while (current_cluster < EOC && current_cluster != 0x0000000) {
+        uint32_t fat_offset = current_cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        uint32_t next_cluster;
+        fread(&next_cluster, sizeof(uint32_t), 1, fp);
+        next_cluster &= 0x0FFFFFFF;
+
+        uint32_t free_value = 0x00000000;
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        fwrite(&free_value, sizeof(uint32_t), 1, fp);
+
+        current_cluster = next_cluster;
+    }
+
+    fseek(fp, dir_entry_offset, SEEK_SET);
+    uint8_t deleted_marker = 0xE5;
+    fwrite(&deleted_marker, sizeof(uint8_t), 1, fp);
+}
+
+
 int main(int argc, char *argv[]) {
     //error checking for if more than 1 arg is provided when running program
     if (argc != 2) {
@@ -650,6 +749,8 @@ int main(int argc, char *argv[]) {
             lseek_file(tokens[1], atoi(tokens[2]));
         }  else if (strcmp(tokens[0], "read") == 0 && token_count > 2) {
             read_file(tokens[1], atoi(tokens[2]));
+        } else if (strcmp(tokens[0], "rm") == 0 && token_count > 1) {
+            rm(tokens[1]);
         } else {
             printf("Unknown command\n");
         }
