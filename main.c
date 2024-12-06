@@ -77,6 +77,28 @@ void read_bpb() {
     fread(&bpb, sizeof(BPB), 1, fp);
 }
 
+void get_directory_entry_name(DirectoryEntry *dir, char *name) {
+    memcpy(name, dir->DIR_Name, 11);
+    name[11] = '\0';
+    for (int i = 10; i >= 0; i--) {
+        if (name[i] == ' ') {
+            name[i] = '\0';
+        } else {
+            break;
+        }
+    }
+}
+
+uint32_t cluster_to_sector(uint32_t cluster) {
+    return ((cluster - 2) * bpb.SecPerClus) + (bpb.RsvdSecCnt + (bpb.NumFATs * bpb.FATSz32));
+}
+
+void seek_to_cluster(uint32_t cluster) {
+    uint32_t first_sector = cluster_to_sector(cluster);
+    uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+    fseek(fp, byte_offset, SEEK_SET);
+}
+
 void print_info() {
     unsigned int total_clusters = (bpb.TotSec32 - (bpb.RsvdSecCnt + (bpb.NumFATs * bpb.FATSz32))) / bpb.SecPerClus;
     unsigned int size_of_image = bpb.TotSec32 * bpb.BytsPerSec;
@@ -89,18 +111,12 @@ void print_info() {
     printf("Size of Image: %u bytes\n", size_of_image);
 }
 
-uint32_t cluster_to_sector(uint32_t cluster) {
-    return ((cluster - 2) * bpb.SecPerClus) + (bpb.RsvdSecCnt + (bpb.NumFATs * bpb.FATSz32));
-}
-
 void ls() {
     uint32_t current_cluster = current_directory_cluster;
     int dots_printed = 0;
 
     while (1) {
-        uint32_t first_sector = cluster_to_sector(current_cluster);
-        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
-        fseek(fp, byte_offset, SEEK_SET);
+        seek_to_cluster(current_cluster);
 
         DirectoryEntry dir;
         while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
@@ -112,15 +128,7 @@ void ls() {
             }
 
             char name[12];
-            memcpy(name, dir.DIR_Name, 11);
-            name[11] = '\0';
-            for (int i = 10; i >= 0; i--) {
-                if (name[i] == ' ') {
-                    name[i] = '\0';
-                } else {
-                    break;
-                }
-            }
+            get_directory_entry_name(&dir, name);
 
             if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
                 if (dots_printed == 2) {
@@ -216,15 +224,7 @@ void cd(char *dirname) {
         }
 
         char name[12];
-        memcpy(name, dir.DIR_Name, 11);
-        name[11] = '\0';
-        for (int i = 10; i >= 0; i--) {
-            if (name[i] == ' ') {
-                name[i] = '\0';
-            } else {
-                break;
-            }
-        }
+        get_directory_entry_name(&dir, name);
 
         if (strcmp(name, dirname) == 0) {
             if (dir.DIR_Attr & ATTR_DIRECTORY) {
@@ -286,15 +286,7 @@ void mkdir(char *dirname) {
         }
 
         char name[12];
-        memcpy(name, dir.DIR_Name, 11);
-        name[11] = '\0';
-        for (int i = 10; i >= 0; i--) {
-            if (name[i] == ' ') {
-                name[i] = '\0';
-            } else {
-                break;
-            }
-        }
+        get_directory_entry_name(&dir, name);
 
         if (strcmp(name, dirname) == 0) {
             printf("Directory with same name already exists\n");
@@ -363,15 +355,7 @@ void creat(char *filename) {
         }
 
         char name[12];
-        memcpy(name, dir.DIR_Name, 11);
-        name[11] = '\0';
-        for (int i = 10; i >= 0; i--) {
-            if (name[i] == ' ') {
-                name[i] = '\0';
-            } else {
-                break;
-            }
-        }
+        get_directory_entry_name(&dir, name);
 
         if (strcmp(name, filename) == 0) {
             printf("File with same name already exists\n");
@@ -461,15 +445,7 @@ void open_file(char *filename, char *flag) {
         }
 
         char name[12];
-        memcpy(name, dir.DIR_Name, 11);
-        name[11] = '\0';
-        for (int i = 10; i >= 0; i--) {
-            if (name[i] == ' ') {
-                name[i] = '\0';
-            } else {
-                break;
-            }
-        }
+        get_directory_entry_name(&dir, name);
 
         if (strcmp(name, filename) == 0) {
             if (dir.DIR_Attr & ATTR_DIRECTORY) {
@@ -626,9 +602,7 @@ void rm(char *filename) {
     DirectoryEntry dir;
 
     while (1) {
-        uint32_t first_sector = cluster_to_sector(current_cluster);
-        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
-        fseek(fp, byte_offset, SEEK_SET);
+        seek_to_cluster(current_cluster);
 
         while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
             if (dir.DIR_Name[0] == 0x00) {
@@ -642,15 +616,7 @@ void rm(char *filename) {
             }
 
             char name[12];
-            memcpy(name, dir.DIR_Name, 11);
-            name[11] = '\0';
-            for (int i = 10; i >= 0; i--) {
-                if (name[i] == ' ') {
-                    name[i] = '\0';
-                } else {
-                    break;
-                }
-            }
+            get_directory_entry_name(&dir, name);
 
             if (strcmp(name, filename) == 0) {
                 if (dir.DIR_Attr & ATTR_DIRECTORY) {
@@ -727,9 +693,8 @@ void rename_file(char *filename, char *new_filename) {
     uint32_t original_cluster = 0;
 
     while (1) {
-        uint32_t first_sector = cluster_to_sector(current_cluster);
-        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
-        fseek(fp, byte_offset, SEEK_SET);
+        seek_to_cluster(current_cluster);
+
 
         while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
             if (dir.DIR_Name[0] == 0x00) {
@@ -743,15 +708,7 @@ void rename_file(char *filename, char *new_filename) {
             }
 
             char name[12];
-            memcpy(name, dir.DIR_Name, 11);
-            name[11] = '\0';
-            for (int i = 10; i >= 0; i--) {
-                if (name[i] == ' ') {
-                    name[i] = '\0';
-                } else {
-                    break;
-                }
-            }
+            get_directory_entry_name(&dir, name);
 
             if (strcmp(name, filename) == 0) {
                 if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
@@ -853,15 +810,7 @@ void write_file(char *filename, char *string) {
             }
 
             char name[12];
-            memcpy(name, dir.DIR_Name, 11);
-            name[11] = '\0';
-            for (int j = 10; j >= 0; j--) {
-                if (name[j] == ' ') {
-                    name[j] = '\0';
-                } else {
-                    break;
-                }
-            }
+            get_directory_entry_name(&dir, name);
 
             if (strcmp(name, filename) == 0) {
                 memcpy(&dir_entry, &dir, sizeof(DirectoryEntry));
@@ -942,9 +891,8 @@ void write_file(char *filename, char *string) {
     }
 
     while (bytes_written < length_to_write) {
-        uint32_t first_sector = cluster_to_sector(current_cluster);
-        uint32_t byte_offset = first_sector * bpb.BytsPerSec + offset_within_cluster;
-        fseek(fp, byte_offset, SEEK_SET);
+        seek_to_cluster(current_cluster);
+
 
         uint32_t remaining_in_cluster = bytes_per_cluster - offset_within_cluster;
         uint32_t bytes_to_write = (length_to_write - bytes_written) < remaining_in_cluster ? (length_to_write - bytes_written) : remaining_in_cluster;
@@ -1017,15 +965,7 @@ void rmdir(char *dirname) {
             }
 
             char name[12];
-            memcpy(name, dir.DIR_Name, 11);
-            name[11] = '\0';
-            for (int i = 10; i >= 0; i--) {
-                if (name[i] == ' ') {
-                    name[i] = '\0';
-                } else {
-                    break;
-                }
-            }
+            get_directory_entry_name(&dir, name);
 
             if (strcmp(name, dirname) == 0) {
                 if (!(dir.DIR_Attr & ATTR_DIRECTORY)) {
@@ -1076,15 +1016,7 @@ void rmdir(char *dirname) {
         }
         if (dir.DIR_Name[0] != 0xE5 && !(dir.DIR_Attr & 0x0F)) {
             char name[12];
-            memcpy(name, dir.DIR_Name, 11);
-            name[11] = '\0';
-            for (int i = 10; i >= 0; i--) {
-                if (name[i] == ' ') {
-                    name[i] = '\0';
-                } else {
-                    break;
-                }
-            }
+            get_directory_entry_name(&dir, name);
             if (strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
                 printf("Directory is not empty.\n");
                 return;
