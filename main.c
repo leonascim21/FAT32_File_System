@@ -70,6 +70,8 @@ int main(int argc, char *argv[]) {
             write_file(tokens[1], tokens[2]);
         } else if (strcmp(tokens[0], "rmdir") == 0 && token_count > 1) {
             rmdir(tokens[1]);
+        } else if (strcmp(tokens[0], "dump") == 0 && token_count > 1) {
+            dump(tokens[1]);
         } else {
             printf("Unknown command\n");
         }

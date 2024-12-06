@@ -141,3 +141,62 @@ void cd(char *dirname) {
         }
     }
 }
+
+void dump(char *filename) {
+    DirectoryEntry dir;
+    int found = 0;
+    uint32_t target_cluster = 0;
+
+    seek_to_cluster(current_directory_cluster);
+    while (fread(&dir, sizeof(DirectoryEntry), 1, fp) == 1) {
+        if (dir.DIR_Name[0] == 0x00) {
+            break;
+        }
+        if (dir.DIR_Name[0] == 0xE5) {
+            continue;
+        }
+        if ((dir.DIR_Attr & 0x0F) == 0x0F) {
+            continue;
+        }
+
+        char entry_name[12];
+        get_directory_entry_name(&dir, entry_name);
+
+        if (strcmp(entry_name, filename) == 0) {
+            found = 1;
+            target_cluster = ((uint32_t)dir.DIR_FstClusHI << 16) | dir.DIR_FstClusLO;
+            break;
+        }
+    }
+
+    if (!found) {
+        printf("File not found\n");
+        return;
+    }
+
+    uint32_t current_cluster = target_cluster;
+    uint8_t buffer[512];
+    while (current_cluster < EOC && current_cluster != 0x0000000) {
+        uint32_t first_sector = cluster_to_sector(current_cluster);
+        uint32_t byte_offset = first_sector * bpb.BytsPerSec;
+
+        fseek(fp, byte_offset, SEEK_SET);
+        fread(buffer, sizeof(uint8_t), bpb.SecPerClus * bpb.BytsPerSec, fp);
+
+        for (uint32_t i = 0; i < bpb.SecPerClus * bpb.BytsPerSec; i++) {
+            if(i != 0 && i % 16 == 0) {
+                printf("\n");
+            }
+            printf("%02X ", buffer[i]);
+        }
+        printf("\n");
+
+        uint32_t fat_offset = current_cluster * 4;
+        uint32_t fat_sector = bpb.RsvdSecCnt + (fat_offset / bpb.BytsPerSec);
+        uint32_t fat_offset_within_sector = fat_offset % bpb.BytsPerSec;
+
+        fseek(fp, fat_sector * bpb.BytsPerSec + fat_offset_within_sector, SEEK_SET);
+        fread(&current_cluster, sizeof(uint32_t), 1, fp);
+        current_cluster &= 0x0FFFFFFF;
+    }
+}

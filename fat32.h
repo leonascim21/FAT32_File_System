@@ -95,5 +95,6 @@ void rm(char *filename);
 void rename_file(char *filename, char *new_filename);
 void write_file(char *filename, char *string);
 void rmdir(char *dirname);
+void dump(char *filename);
 
 #endif
